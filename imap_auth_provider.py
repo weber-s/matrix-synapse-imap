@@ -28,6 +28,56 @@ class IMAPAuthProvider:
         self.port = config.port
 
     @defer.inlineCallbacks
+    def check_3pid_auth(self, medium, address, password):
+        """ Handle authentication against thirdparty login types, such as email
+            Args:
+                medium (str): Medium of the 3PID (e.g email, msisdn).
+                address (str): Address of the 3PID (e.g bob@example.com for email).
+                password (str): The provided password of the user.
+            Returns:
+                user_id (str|None): ID of the user if authentication
+                    successful. None otherwise.
+        """
+        # We support only email
+        if medium != "email":
+            defer.returnValue(None)
+
+        # user_id is of the form @foo:bar.com
+        email = address
+        localpart = address.split("@", 1)[0]
+        user_id = "@"+localpart+":"+"testmatrix.gresille.org"
+        #localpart = user_id.split(":", 1)[0][1:]
+        #email = '@'.join(user_id[1:].split(':'))
+
+        logger.info("Trying to login as %s on %s:%d via IMAP", email, self.server, self.port)
+
+        # Talk to IMAP and check if this email/password combo is correct
+        try:
+            logger.debug("Attempting IMAP connection with %s", self.server)
+            M = imaplib.IMAP4_SSL(self.server, self.port)
+            r = M.login(email, password)
+            if r[0] == 'OK':
+                M.logout()
+        except:
+            defer.returnValue(None)
+
+        if r[0] != 'OK':
+            defer.returnValue(None)
+
+        # From here on, the user is authenticated
+
+        # Bail if we don't want to create users in Matrix
+        if not self.create_users:
+            defer.returnValue(None)
+
+        # Create the user in Matrix if it doesn't exist yet
+        if not (yield self.account_handler.check_user_exists(user_id)):
+            yield self.account_handler.register_user(localpart=localpart, emails=[email])
+
+        defer.returnValue(user_id)
+
+
+    @defer.inlineCallbacks
     def check_password(self, user_id, password):
         """ Attempt to authenticate a user against IMAP
             and register an account if none exists.
